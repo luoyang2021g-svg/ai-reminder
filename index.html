@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI 拾事提醒</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="phone">
+    <header>
+      <h1>AI 拾事提醒</h1>
+      <p>粘贴一条消息，我帮你变成提醒。</p>
+    </header>
+
+    <main>
+      <section class="input-card">
+        <textarea
+          id="messageInput"
+          placeholder="例如：明天下午4点前把报名表发我，记得附学生证照片。"
+        ></textarea>
+
+        <button id="generateBtn">生成提醒</button>
+      </section>
+
+      <section id="resultCard" class="result-card hidden">
+        <div class="card-top">
+          <span class="tag">AI 已识别</span>
+          <span id="priorityTag" class="priority-tag">中优先级</span>
+        </div>
+
+        <h2 id="taskTitle">发送报名表</h2>
+
+        <div class="info-row">
+          <span>截止时间</span>
+          <strong id="deadline">明天下午4点前</strong>
+        </div>
+
+        <div class="info-row">
+          <span>建议提醒</span>
+          <strong id="remindTime">明天下午3点</strong>
+        </div>
+
+        <div class="info-row">
+            <span>日历时间</span>
+            <strong id="eventDatetime">待确认</strong>
+        </div>
+
+        <div class="info-row">
+            <span>标准提醒</span>
+            <strong id="remindDatetime">待确认</strong>
+        </div>
+
+        <div class="info-row">
+          <span>准备材料</span>
+          <strong id="materials">学生证照片</strong>
+        </div>
+
+        <div class="info-row">
+          <span>相关人物</span>
+          <strong id="people">无</strong>
+        </div>
+
+        <div class="info-row">
+          <span>地点</span>
+          <strong id="location">无</strong>
+        </div>
+
+        <p id="summary" class="summary">
+          需要在明天下午4点前发送报名表，并附上学生证照片。
+        </p>
+
+        <div class="button-group">
+          <button id="copyBtn">复制待办</button>
+          <button id="calendarBtn">添加到日历</button>
+          <button id="saveBtn">保存记录</button>
+        </div>
+
+        <div id="calendarDownloadBox" class="hidden" style="margin-top: 14px;">
+          <a id="calendarDownloadLink" href="#" download="ai-reminder.ics">
+            如果没有自动下载，请点击这里下载日历文件
+          </a>
+        </div>
+      </section>
+
+      <section class="history">
+        <div class="history-title">
+          <h3>历史记录</h3>
+          <button id="clearHistoryBtn" class="small-btn">清空</button>
+        </div>
+
+        <div id="historyList" class="history-list">
+          <p class="empty-text">暂无历史记录</p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
