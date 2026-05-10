@@ -197,3 +197,44 @@ button:active {
   font-size: 14px;
   margin: 8px 0 0;
 }
+
+.privacy-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(15, 23, 42, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.privacy-modal.hidden {
+  display: none;
+}
+
+.privacy-card {
+  width: 100%;
+  max-width: 380px;
+  background: #ffffff;
+  border-radius: 24px;
+  padding: 22px;
+  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.28);
+}
+
+.privacy-card h2 {
+  margin: 0 0 14px;
+  color: #111827;
+  font-size: 22px;
+}
+
+.privacy-card p {
+  margin: 10px 0;
+  line-height: 1.7;
+  color: #4b5563;
+  font-size: 15px;
+}
+
+.privacy-card button {
+  margin-top: 18px;
+}
