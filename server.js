@@ -2,14 +2,22 @@ require("dotenv").config();
 
 const express = require("express");
 const cors = require("cors");
-const path = require("path");
+const { createClient } = require("@supabase/supabase-js");
 
 const app = express();
 
 const PORT = process.env.PORT || 5173;
-const API_BASE_URL = (process.env.API_BASE_URL || "https://api.deepseek.com").replace(/\/$/, "");
+const API_BASE_URL = (process.env.API_BASE_URL || "https://api.deepseek.com/v1").replace(/\/$/, "");
 const API_KEY = process.env.API_KEY;
-const MODEL_NAME = process.env.MODEL_NAME || "deepseek-v4-flash";
+const MODEL_NAME = process.env.MODEL_NAME || "deepseek-chat";
+
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+const supabase =
+  SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
+    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    : null;
 
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
@@ -21,7 +29,7 @@ function simpleRateLimit(req, res, next) {
   const ip = req.ip || req.headers["x-forwarded-for"] || "unknown";
   const now = Date.now();
   const windowMs = 60 * 60 * 1000;
-  const maxRequests = 30;
+  const maxRequests = 60;
 
   const record = rateLimitMap.get(ip) || {
     count: 0,
@@ -45,17 +53,161 @@ function simpleRateLimit(req, res, next) {
   next();
 }
 
+async function safeInsert(table, data) {
+  if (!supabase) {
+    console.warn("Supabase 未配置，跳过写入：", table);
+    return;
+  }
+
+  const { error } = await supabase.from(table).insert(data);
+
+  if (error) {
+    console.error(`写入 ${table} 失败：`, error.message);
+  }
+}
+
+async function upsertAppUser({ anonymousUserId, deviceType, appVersion }) {
+  if (!supabase || !anonymousUserId) return;
+
+  const now = new Date().toISOString();
+
+  const { error } = await supabase.from("app_user").upsert(
+    {
+      anonymous_user_id: anonymousUserId,
+      device_type: deviceType || "unknown",
+      app_version: appVersion || "1.0.0",
+      last_seen_at: now
+    },
+    {
+      onConflict: "anonymous_user_id"
+    }
+  );
+
+  if (error) {
+    console.error("写入 app_user 失败：", error.message);
+  }
+}
+
+async function trackEvent({
+  anonymousUserId,
+  eventType,
+  success = true,
+  errorMessage = null,
+  inputLength = null
+}) {
+  await safeInsert("usage_event", {
+    anonymous_user_id: anonymousUserId || null,
+    event_type: eventType,
+    success,
+    error_message: errorMessage,
+    input_length: inputLength
+  });
+}
+
+async function logAiRequest({
+  anonymousUserId,
+  inputLength,
+  outputSuccess,
+  latencyMs,
+  errorMessage = null
+}) {
+  await safeInsert("ai_request_log", {
+    anonymous_user_id: anonymousUserId || null,
+    model_name: MODEL_NAME,
+    input_length: inputLength,
+    output_success: outputSuccess,
+    latency_ms: latencyMs,
+    error_message: errorMessage
+  });
+}
+
 app.get("/api/health", (req, res) => {
   res.json({
     ok: true,
     service: "AI 拾事提醒",
-    model: MODEL_NAME
+    model: MODEL_NAME,
+    database: supabase ? "connected" : "not_configured"
   });
 });
 
-app.post("/api/analyze", simpleRateLimit, async (req, res) => {
+app.post("/api/device/register", async (req, res) => {
   try {
-    const { text } = req.body;
+    const { anonymousUserId, deviceType, appVersion } = req.body;
+
+    if (!anonymousUserId) {
+      return res.status(400).json({
+        error: "缺少 anonymousUserId"
+      });
+    }
+
+    await upsertAppUser({
+      anonymousUserId,
+      deviceType,
+      appVersion
+    });
+
+    await trackEvent({
+      anonymousUserId,
+      eventType: "app_open",
+      success: true
+    });
+
+    res.json({
+      ok: true,
+      anonymousUserId
+    });
+  } catch (error) {
+    console.error("注册设备失败：", error);
+
+    res.status(500).json({
+      error: "注册设备失败",
+      detail: error.message
+    });
+  }
+});
+
+app.post("/api/event/track", async (req, res) => {
+  try {
+    const {
+      anonymousUserId,
+      eventType,
+      success = true,
+      errorMessage = null,
+      inputLength = null
+    } = req.body;
+
+    if (!eventType) {
+      return res.status(400).json({
+        error: "缺少 eventType"
+      });
+    }
+
+    await trackEvent({
+      anonymousUserId,
+      eventType,
+      success,
+      errorMessage,
+      inputLength
+    });
+
+    res.json({
+      ok: true
+    });
+  } catch (error) {
+    console.error("记录事件失败：", error);
+
+    res.status(500).json({
+      error: "记录事件失败",
+      detail: error.message
+    });
+  }
+});
+
+app.post("/api/analyze", simpleRateLimit, async (req, res) => {
+  const startTime = Date.now();
+
+  try {
+    const { text, anonymousUserId } = req.body;
 
     if (!text || !text.trim()) {
       return res.status(400).json({
@@ -74,6 +226,13 @@ app.post("/api/analyze", simpleRateLimit, async (req, res) => {
         error: "服务器未配置 API_KEY"
       });
     }
+
+    await trackEvent({
+      anonymousUserId,
+      eventType: "analyze_click",
+      success: true,
+      inputLength: text.length
+    });
 
     const today = new Date().toLocaleDateString("zh-CN");
 
@@ -134,9 +293,27 @@ app.post("/api/analyze", simpleRateLimit, async (req, res) => {
       })
     });
 
+    const latencyMs = Date.now() - startTime;
+
     if (!response.ok) {
       const errorText = await response.text();
       console.error("DeepSeek API 调用失败：", errorText);
+
+      await trackEvent({
+        anonymousUserId,
+        eventType: "analyze_failed",
+        success: false,
+        errorMessage: "AI 服务调用失败",
+        inputLength: text.length
+      });
+
+      await logAiRequest({
+        anonymousUserId,
+        inputLength: text.length,
+        outputSuccess: false,
+        latencyMs,
+        errorMessage: errorText.slice(0, 500)
+      });
 
       return res.status(500).json({
         error: "AI 服务调用失败",
@@ -148,6 +325,22 @@ app.post("/api/analyze", simpleRateLimit, async (req, res) => {
     let content = data.choices?.[0]?.message?.content;
 
     if (!content) {
+      await trackEvent({
+        anonymousUserId,
+        eventType: "analyze_failed",
+        success: false,
+        errorMessage: "AI 没有返回内容",
+        inputLength: text.length
+      });
+
+      await logAiRequest({
+        anonymousUserId,
+        inputLength: text.length,
+        outputSuccess: false,
+        latencyMs,
+        errorMessage: "AI 没有返回内容"
+      });
+
       return res.status(500).json({
         error: "AI 没有返回内容"
       });
@@ -161,6 +354,22 @@ app.post("/api/analyze", simpleRateLimit, async (req, res) => {
       task = JSON.parse(content);
     } catch (error) {
       console.error("AI 返回内容不是合法 JSON：", content);
+
+      await trackEvent({
+        anonymousUserId,
+        eventType: "analyze_failed",
+        success: false,
+        errorMessage: "AI 返回内容不是合法 JSON",
+        inputLength: text.length
+      });
+
+      await logAiRequest({
+        anonymousUserId,
+        inputLength: text.length,
+        outputSuccess: false,
+        latencyMs,
+        errorMessage: "AI 返回内容不是合法 JSON"
+      });
 
       return res.status(500).json({
         error: "AI 返回内容不是合法 JSON",
@@ -181,9 +390,33 @@ app.post("/api/analyze", simpleRateLimit, async (req, res) => {
       summary: task.summary || "AI 已识别出这条消息可能包含待办事项。"
     };
 
+    await trackEvent({
+      anonymousUserId,
+      eventType: "analyze_success",
+      success: true,
+      inputLength: text.length
+    });
+
+    await logAiRequest({
+      anonymousUserId,
+      inputLength: text.length,
+      outputSuccess: true,
+      latencyMs
+    });
+
     res.json(normalizedTask);
   } catch (error) {
+    const latencyMs = Date.now() - startTime;
+
     console.error("服务器错误：", error);
+
+    await logAiRequest({
+      anonymousUserId: req.body?.anonymousUserId,
+      inputLength: req.body?.text?.length || 0,
+      outputSuccess: false,
+      latencyMs,
+      errorMessage: error.message
+    });
 
     res.status(500).json({
       error: "服务器内部错误",
@@ -204,4 +437,5 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log(`AI 拾事提醒已启动：http://127.0.0.1:${PORT}`);
   console.log(`当前模型：${MODEL_NAME}`);
   console.log(`API 地址：${API_BASE_URL}`);
+  console.log(`Supabase：${supabase ? "已连接" : "未配置"}`);
 });
