@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI 拾事提醒后台</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: #f3f6fb;
+      color: #111827;
+    }
+
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 32px 18px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      color: #2454d6;
+    }
+
+    .subtitle {
+      color: #6b7280;
+      margin-bottom: 24px;
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+
+    button {
+      border: none;
+      border-radius: 12px;
+      padding: 10px 16px;
+      background: #2454d6;
+      color: white;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    button.secondary {
+      background: #e5e7eb;
+      color: #111827;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 14px;
+      margin-bottom: 24px;
+    }
+
+    .card {
+      background: white;
+      border-radius: 18px;
+      padding: 18px;
+      box-shadow: 0 10px 26px rgba(31, 41, 55, 0.08);
+    }
+
+    .card span {
+      display: block;
+      font-size: 14px;
+      color: #6b7280;
+      margin-bottom: 8px;
+    }
+
+    .card strong {
+      font-size: 28px;
+    }
+
+    .table-card {
+      background: white;
+      border-radius: 18px;
+      padding: 18px;
+      box-shadow: 0 10px 26px rgba(31, 41, 55, 0.08);
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 760px;
+    }
+
+    th,
+    td {
+      text-align: left;
+      padding: 12px;
+      border-bottom: 1px solid #edf1f7;
+      font-size: 14px;
+    }
+
+    th {
+      color: #6b7280;
+      font-weight: 600;
+      background: #f9fafb;
+    }
+
+    .success {
+      color: #059669;
+      font-weight: 600;
+    }
+
+    .failed {
+      color: #dc2626;
+      font-weight: 600;
+    }
+
+    .empty {
+      color: #9ca3af;
+      padding: 18px 0;
+    }
+
+    @media (max-width: 900px) {
+      .grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+
+    @media (max-width: 520px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .card strong {
+        font-size: 24px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>AI 拾事提醒后台</h1>
+    <div class="subtitle">查看匿名用户、AI 调用和核心功能使用情况</div>
+
+    <div class="toolbar">
+      <button onclick="loadStats()">刷新数据</button>
+      <button class="secondary" onclick="resetToken()">重新输入后台密码</button>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <span>总匿名用户数</span>
+        <strong id="totalUsers">-</strong>
+      </div>
+      <div class="card">
+        <span>今日活跃用户</span>
+        <strong id="todayActiveUsers">-</strong>
+      </div>
+      <div class="card">
+        <span>今日 AI 调用</span>
+        <strong id="todayAiRequests">-</strong>
+      </div>
+      <div class="card">
+        <span>今日添加日历</span>
+        <strong id="todayCalendarClicks">-</strong>
+      </div>
+      <div class="card">
+        <span>AI 成功率</span>
+        <strong id="aiSuccessRate">-</strong>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom: 24px;">
+      <span>今日平均响应时间</span>
+      <strong id="averageLatencyMs">-</strong>
+    </div>
+
+    <div class="table-card">
+      <h2>最近 20 条事件</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>时间</th>
+            <th>匿名用户</th>
+            <th>事件</th>
+            <th>是否成功</th>
+            <th>输入长度</th>
+            <th>错误信息</th>
+          </tr>
+        </thead>
+        <tbody id="eventTable">
+          <tr>
+            <td colspan="6" class="empty">暂无数据</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    function getToken() {
+      let token = localStorage.getItem("ai_reminder_admin_token");
+
+      if (!token) {
+        token = prompt("请输入后台访问密码");
+
+        if (token) {
+          localStorage.setItem("ai_reminder_admin_token", token);
+        }
+      }
+
+      return token;
+    }
+
+    function resetToken() {
+      localStorage.removeItem("ai_reminder_admin_token");
+      loadStats();
+    }
+
+    function formatTime(value) {
+      if (!value) return "-";
+
+      try {
+        return new Date(value).toLocaleString();
+      } catch (error) {
+        return value;
+      }
+    }
+
+    async function loadStats() {
+      const token = getToken();
+
+      if (!token) {
+        alert("需要后台访问密码");
+        return;
+      }
+
+      try {
+        const response = await fetch("/api/admin/stats", {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          alert(data.error || "读取后台数据失败");
+          return;
+        }
+
+        document.getElementById("totalUsers").textContent = data.totalUsers;
+        document.getElementById("todayActiveUsers").textContent = data.todayActiveUsers;
+        document.getElementById("todayAiRequests").textContent = data.todayAiRequests;
+        document.getElementById("todayCalendarClicks").textContent = data.todayCalendarClicks;
+        document.getElementById("aiSuccessRate").textContent = data.aiSuccessRate;
+        document.getElementById("averageLatencyMs").textContent =
+          data.averageLatencyMs ? `${data.averageLatencyMs} ms` : "-";
+
+        const eventTable = document.getElementById("eventTable");
+        eventTable.innerHTML = "";
+
+        if (!data.recentEvents || data.recentEvents.length === 0) {
+          eventTable.innerHTML = `<tr><td colspan="6" class="empty">暂无数据</td></tr>`;
+          return;
+        }
+
+        data.recentEvents.forEach((event) => {
+          const row = document.createElement("tr");
+
+          row.innerHTML = `
+            <td>${formatTime(event.created_at)}</td>
+            <td>${event.anonymous_user_id || "-"}</td>
+            <td>${event.event_type || "-"}</td>
+            <td class="${event.success ? "success" : "failed"}">${event.success ? "成功" : "失败"}</td>
+            <td>${event.input_length ?? "-"}</td>
+            <td>${event.error_message || "-"}</td>
+          `;
+
+          eventTable.appendChild(row);
+        });
+      } catch (error) {
+        console.error(error);
+        alert("读取后台数据失败");
+      }
+    }
+
+    loadStats();
+  </script>
+</body>
+</html>

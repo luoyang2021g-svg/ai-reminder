@@ -121,6 +121,50 @@ async function logAiRequest({
   });
 }
 
+function requireAdminToken(req, res, next) {
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.replace("Bearer ", "").trim();
+
+  if (!process.env.ADMIN_TOKEN) {
+    return res.status(500).json({
+      error: "服务器未配置 ADMIN_TOKEN"
+    });
+  }
+
+  if (token !== process.env.ADMIN_TOKEN) {
+    return res.status(401).json({
+      error: "无权限访问后台数据"
+    });
+  }
+
+  next();
+}
+
+async function getExactCount(table, filters = []) {
+  if (!supabase) return 0;
+
+  let query = supabase
+    .from(table)
+    .select("*", {
+      count: "exact",
+      head: true
+    });
+
+  filters.forEach((filter) => {
+    query = query[filter.method](filter.column, filter.value);
+  });
+
+  const { count, error } = await query;
+
+  if (error) {
+    console.error(`统计 ${table} 失败：`, error.message);
+    return 0;
+  }
+
+  return count || 0;
+}
+
+
 app.get("/api/health", (req, res) => {
   res.json({
     ok: true,
@@ -129,6 +173,115 @@ app.get("/api/health", (req, res) => {
     database: supabase ? "connected" : "not_configured"
   });
 });
+
+app.get("/api/admin/stats", requireAdminToken, async (req, res) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({
+        error: "Supabase 未配置"
+      });
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayIso = today.toISOString();
+
+    const totalUsers = await getExactCount("app_user");
+
+    const todayAiRequests = await getExactCount("ai_request_log", [
+      {
+        method: "gte",
+        column: "created_at",
+        value: todayIso
+      }
+    ]);
+
+    const todayAiSuccess = await getExactCount("ai_request_log", [
+      {
+        method: "gte",
+        column: "created_at",
+        value: todayIso
+      },
+      {
+        method: "eq",
+        column: "output_success",
+        value: true
+      }
+    ]);
+
+    const todayCalendarClicks = await getExactCount("usage_event", [
+      {
+        method: "gte",
+        column: "created_at",
+        value: todayIso
+      },
+      {
+        method: "eq",
+        column: "event_type",
+        value: "calendar_click"
+      }
+    ]);
+
+    const { data: todayEvents } = await supabase
+      .from("usage_event")
+      .select("anonymous_user_id")
+      .gte("created_at", todayIso)
+      .not("anonymous_user_id", "is", null);
+
+    const todayActiveUsers = new Set(
+      (todayEvents || []).map((item) => item.anonymous_user_id)
+    ).size;
+
+    const { data: todayAiLogs } = await supabase
+      .from("ai_request_log")
+      .select("latency_ms")
+      .gte("created_at", todayIso)
+      .not("latency_ms", "is", null);
+
+    const averageLatencyMs =
+      todayAiLogs && todayAiLogs.length > 0
+        ? Math.round(
+            todayAiLogs.reduce((sum, item) => sum + Number(item.latency_ms || 0), 0) /
+              todayAiLogs.length
+          )
+        : 0;
+
+    const aiSuccessRate =
+      todayAiRequests > 0
+        ? `${((todayAiSuccess / todayAiRequests) * 100).toFixed(1)}%`
+        : "0%";
+
+    const { data: recentEvents, error: recentError } = await supabase
+      .from("usage_event")
+      .select("anonymous_user_id,event_type,success,error_message,input_length,created_at")
+      .order("created_at", {
+        ascending: false
+      })
+      .limit(20);
+
+    if (recentError) {
+      console.error("读取最近事件失败：", recentError.message);
+    }
+
+    res.json({
+      totalUsers,
+      todayActiveUsers,
+      todayAiRequests,
+      todayCalendarClicks,
+      aiSuccessRate,
+      averageLatencyMs,
+      recentEvents: recentEvents || []
+    });
+  } catch (error) {
+    console.error("后台统计失败：", error);
+
+    res.status(500).json({
+      error: "后台统计失败",
+      detail: error.message
+    });
+  }
+});
+
 
 app.post("/api/device/register", async (req, res) => {
   try {
