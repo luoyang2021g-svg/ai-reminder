@@ -1,0 +1,8 @@
+{
+  "appId": "com.aireminder.app",
+  "appName": "AI拾事提醒",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https"
+  }
+}

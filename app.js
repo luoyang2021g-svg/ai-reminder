@@ -135,7 +135,9 @@ clearHistoryBtn.addEventListener("click", () => {
 });
 
 async function analyzeWithAI(text) {
-  const response = await fetch("/api/analyze", {
+  const API_URL = "https://ai-reminder-8tns.onrender.com/api/analyze";
+
+  const response = await fetch(API_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
@@ -153,6 +155,7 @@ async function analyzeWithAI(text) {
 
   return data;
 }
+
 
 
 function renderTask(task) {
